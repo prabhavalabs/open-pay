@@ -5,10 +5,11 @@ set -euo pipefail
 # Open Pay — Production Deploy Script (self-contained, shared-host safe)
 # Usage: ./deploy.sh [production]
 #
-# The whole stack (infra + services) runs under the `openpay` compose project
-# on its own private network. Nothing is published to the host except the
-# gateway on 127.0.0.1:${GATEWAY_BIND_PORT:-7000}, which the host nginx proxies.
-# Safe to run alongside other projects on the same box.
+# The stack runs under the `openpay` compose project on its own private
+# network, with redis and nats bundled. Postgres and object storage come from
+# the shared platform stack on the external `platform` network. Nothing is
+# published to the host except the gateway on 127.0.0.1:${GATEWAY_BIND_PORT:-7000},
+# which the host nginx proxies. Safe to run alongside other projects.
 # =============================================================================
 
 ENVIRONMENT="${1:-production}"
@@ -67,18 +68,21 @@ fi
 echo "==> Building service images..."
 $COMPOSE build --parallel
 
-# --- Start infrastructure first ---
-echo "==> Starting infrastructure (postgres, redis, nats, minio)..."
-$COMPOSE up -d postgres redis nats minio minio-init
+# --- Shared platform services ---
+# Postgres and object storage live in the host's platform stack
+# (/opt/platform), reached over its external Docker network.
+PLATFORM_NETWORK="$(grep -E '^PLATFORM_NETWORK=' "$ENV_FILE" | cut -d= -f2 || true)"
+PLATFORM_NETWORK="${PLATFORM_NETWORK:-platform}"
+if ! docker network inspect "$PLATFORM_NETWORK" >/dev/null 2>&1; then
+  echo "ERROR: Docker network '$PLATFORM_NETWORK' not found. Start the platform stack first."
+  exit 1
+fi
 
-echo "==> Waiting for Postgres to be healthy..."
-until [ "$($COMPOSE ps -q postgres | xargs -r docker inspect -f '{{.State.Health.Status}}' 2>/dev/null)" = "healthy" ]; do
-  echo "  ...waiting for postgres"
-  sleep 2
-done
-echo "Postgres healthy."
+# --- Start bundled infrastructure ---
+echo "==> Starting infrastructure (redis, nats)..."
+$COMPOSE up -d redis nats
 
-# --- Run migrations INSIDE the network (against this stack's own postgres) ---
+# --- Run migrations against the shared Postgres ---
 echo "==> Running database migrations..."
 $COMPOSE run --rm migrate up
 

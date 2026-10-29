@@ -81,7 +81,7 @@ Open Pay is built as a distributed microservices system with 8 backend services,
 | **Database** | PostgreSQL 16 (database-per-service pattern) |
 | **Cache** | Redis 7 (rate limiting, session cache) |
 | **Messaging** | NATS JetStream (event-driven async processing) |
-| **File Storage** | MinIO (S3-compatible object storage) |
+| **File Storage** | S3-compatible object storage (MinIO locally, Garage in production; private bucket served via `/v1/assets/`) |
 | **Smart Contracts** | Solidity 0.8.24, Hardhat, OpenZeppelin, Chainlink |
 | **Auth** | JWT (merchant/admin), HMAC-SHA256 (SDK), ED25519 (webhooks) |
 | **Monitoring** | Prometheus, Grafana, zerolog, OpenTelemetry |
@@ -118,9 +118,14 @@ Each microservice owns its database schema, enforcing data isolation:
 | Exchange | `exchange_db` | exchange_rates |
 | Admin | `admin_db` | admin_users, roles, audit_logs, settings, legal_documents |
 
+The names above are the local development defaults. Each service connects to
+`DB_NAME_PREFIX + <service> + DB_NAME_SUFFIX`, so production on the shared
+Postgres server uses `openpay_merchant`, `openpay_payment` and so on, owned by
+one non-superuser role. See `docs/DEPLOYMENT.md`.
+
 ## Deployment
 
-- **Backend**: Docker Compose on DigitalOcean (8 services + infra)
+- **Backend**: Docker Compose on a shared VPS (services plus Redis and NATS); Postgres and object storage come from the host's shared platform stack
 - **Frontends**: Vercel with automatic deploys from GitHub
 - **Smart Contracts**: BSC Testnet (Hardhat deployment)
 - **DNS**: Custom domains via Cloudflare

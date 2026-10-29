@@ -1,11 +1,15 @@
-# Production Docker Compose — Open Pay, fully self-contained.
+# Production Docker Compose — Open Pay on a shared host.
 #
 # Designed to run on a SHARED host alongside other projects without conflicts:
-#   * Its own project namespace (name: openpay) and private network.
-#   * Bundled infra (postgres/redis/nats/minio) — NOT published to the host.
+#   * Its own project namespace (name: openpay) and private network (openpay-net).
+#   * Redis and NATS are bundled here and NOT published to the host.
+#   * Postgres and object storage come from the host's shared platform stack
+#     (/opt/platform): platform-postgres and platform-garage on the external
+#     `platform` network. Only the services that use them join that network.
+#   * Databases are prefixed (openpay_<service>) and owned by one non-superuser
+#     role; the bucket is private and files are served through the gateway.
 #   * ONLY the gateway is published, bound to 127.0.0.1:${GATEWAY_BIND_PORT:-7000}.
 #     A host reverse proxy (nginx) terminates TLS and proxies to it.
-#   * Migrations run inside the network against this stack's own postgres.
 #
 # Usage on the VPS (wrapped by ./deploy.sh production):
 #   docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --build
@@ -15,33 +19,39 @@ name: openpay
 networks:
   openpay:
     name: openpay-net
+  # Shared data services; created by the platform stack, not by this file.
+  platform:
+    name: ${PLATFORM_NETWORK:-platform}
+    external: true
 
 volumes:
-  openpay_postgres_data:
   openpay_redis_data:
   openpay_nats_data:
-  openpay_minio_data:
+
+# Database connection. Each service connects to
+# DB_NAME_PREFIX + <service> + DB_NAME_SUFFIX, e.g. openpay_payment.
+x-db-env: &db-env
+  DB_HOST: ${DB_HOST:-platform-postgres}
+  DB_PORT: ${DB_PORT:-5432}
+  DB_USER: ${DB_USER:?set DB_USER in the env file}
+  DB_PASSWORD: ${DB_PASSWORD:?set DB_PASSWORD in the env file}
+  DB_NAME_PREFIX: ${DB_NAME_PREFIX:?set DB_NAME_PREFIX in the env file}
+  DB_NAME_SUFFIX: ${DB_NAME_SUFFIX:-}
+  DB_SSLMODE: ${DB_SSLMODE:-disable}
+  # Nine services share one role; keep their pools under its connection limit.
+  DB_POOL_MAX_CONNS: ${DB_POOL_MAX_CONNS:-5}
+
+# Object storage (S3-compatible). The bucket must exist and stay private.
+x-s3-env: &s3-env
+  S3_ENDPOINT: ${S3_ENDPOINT:-http://platform-garage:3900}
+  S3_REGION: ${S3_REGION:-garage}
+  S3_FORCE_PATH_STYLE: ${S3_FORCE_PATH_STYLE:-true}
+  S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:?set S3_ACCESS_KEY_ID in the env file}
+  S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:?set S3_SECRET_ACCESS_KEY in the env file}
+  S3_BUCKET: ${S3_BUCKET:?set S3_BUCKET in the env file}
 
 services:
   # ───────────────────────── Infrastructure ─────────────────────────
-  postgres:
-    image: postgres:16-alpine
-    environment:
-      POSTGRES_USER: olp
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      POSTGRES_DB: olp_default
-      POSTGRES_MULTIPLE_DATABASES: payment_db,merchant_db,settlement_db,subscription_db,exchange_db,webhook_db,admin_db,notification_db,directdebit_db
-    volumes:
-      - openpay_postgres_data:/var/lib/postgresql/data
-      - ./scripts/init-multiple-dbs.sh:/docker-entrypoint-initdb.d/init-multiple-dbs.sh
-    networks: [openpay]
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U olp"]
-      interval: 5s
-      timeout: 5s
-      retries: 10
-    restart: unless-stopped
-
   redis:
     image: redis:7-alpine
     volumes:
@@ -67,51 +77,17 @@ services:
       retries: 5
     restart: unless-stopped
 
-  minio:
-    image: minio/minio:latest
-    command: server /data --console-address ":9001"
-    environment:
-      MINIO_ROOT_USER: ${S3_ACCESS_KEY}
-      MINIO_ROOT_PASSWORD: ${S3_SECRET_KEY}
-    volumes:
-      - openpay_minio_data:/data
-    networks: [openpay]
-    healthcheck:
-      test: ["CMD", "mc", "ready", "local"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
-    restart: unless-stopped
-
-  minio-init:
-    image: minio/mc:latest
-    depends_on:
-      minio:
-        condition: service_healthy
-    networks: [openpay]
-    entrypoint: >
-      /bin/sh -c "
-      mc alias set local http://minio:9000 ${S3_ACCESS_KEY} ${S3_SECRET_KEY};
-      mc mb --ignore-existing local/kyc-documents;
-      mc anonymous set download local/kyc-documents;
-      exit 0;
-      "
-    restart: "no"
-
-  # ─── Migrations (one-shot; runs inside the network, then exits) ───
+  # ─── Migrations (one-shot; runs on the platform network, then exits) ───
   migrate:
     image: migrate/migrate:latest
     profiles: ["tools"]
     entrypoint: ["/bin/sh", "/docker-migrate.sh"]
     environment:
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      <<: *db-env
     volumes:
       - ./migrations:/migrations
       - ./scripts/docker-migrate.sh:/docker-migrate.sh:ro
-    networks: [openpay]
-    depends_on:
-      postgres:
-        condition: service_healthy
+    networks: [openpay, platform]
 
   # ───────────────────────── Application ─────────────────────────
   gateway:
@@ -149,9 +125,9 @@ services:
       args:
         SERVICE: payment
     environment:
+      <<: *db-env
       PORT: "8081"
       JWT_SECRET: ${JWT_SECRET}
-      DATABASE_URL: postgres://olp:${POSTGRES_PASSWORD}@postgres:5432/payment_db?sslmode=disable
       EXCHANGE_SERVICE_URL: http://exchange:8085
       MERCHANT_SERVICE_URL: http://merchant:8082
       ADMIN_SERVICE_URL: http://admin:8088
@@ -165,10 +141,7 @@ services:
       DEPOSIT_MASTER_MNEMONIC: ${DEPOSIT_MASTER_MNEMONIC:-}
       PAYMENT_CONFIRMATIONS: ${PAYMENT_CONFIRMATIONS:-3}
       WATCHER_POLL_INTERVAL: ${WATCHER_POLL_INTERVAL:-15s}
-    networks: [openpay]
-    depends_on:
-      postgres:
-        condition: service_healthy
+    networks: [openpay, platform]
     restart: unless-stopped
 
   merchant:
@@ -178,27 +151,17 @@ services:
       args:
         SERVICE: merchant
     environment:
+      <<: [*db-env, *s3-env]
       PORT: "8082"
       JWT_SECRET: ${JWT_SECRET}
-      DATABASE_URL: postgres://olp:${POSTGRES_PASSWORD}@postgres:5432/merchant_db?sslmode=disable
       NOTIFICATION_SERVICE_URL: http://notification:8087
       ADMIN_SERVICE_URL: http://admin:8088
-      MINIO_ENDPOINT: minio:9000
-      MINIO_ACCESS_KEY: ${S3_ACCESS_KEY}
-      MINIO_SECRET_KEY: ${S3_SECRET_KEY}
-      MINIO_BUCKET: kyc-documents
-      MINIO_USE_SSL: "false"
       SMTP_HOST: ${SMTP_HOST}
       SMTP_PORT: ${SMTP_PORT}
       SMTP_USERNAME: ${SMTP_USERNAME}
       SMTP_PASSWORD: ${SMTP_PASSWORD}
       SMTP_FROM: ${SMTP_FROM}
-    networks: [openpay]
-    depends_on:
-      postgres:
-        condition: service_healthy
-      minio:
-        condition: service_healthy
+    networks: [openpay, platform]
     restart: unless-stopped
 
   settlement:
@@ -208,13 +171,10 @@ services:
       args:
         SERVICE: settlement
     environment:
+      <<: *db-env
       PORT: "8083"
       JWT_SECRET: ${JWT_SECRET}
-      DATABASE_URL: postgres://olp:${POSTGRES_PASSWORD}@postgres:5432/settlement_db?sslmode=disable
-    networks: [openpay]
-    depends_on:
-      postgres:
-        condition: service_healthy
+    networks: [openpay, platform]
     restart: unless-stopped
 
   webhook:
@@ -224,14 +184,12 @@ services:
       args:
         SERVICE: webhook
     environment:
+      <<: *db-env
       PORT: "8084"
       JWT_SECRET: ${JWT_SECRET}
-      DATABASE_URL: postgres://olp:${POSTGRES_PASSWORD}@postgres:5432/webhook_db?sslmode=disable
       NATS_URL: nats://nats:4222
-    networks: [openpay]
+    networks: [openpay, platform]
     depends_on:
-      postgres:
-        condition: service_healthy
       nats:
         condition: service_healthy
     restart: unless-stopped
@@ -243,13 +201,10 @@ services:
       args:
         SERVICE: exchange
     environment:
+      <<: *db-env
       PORT: "8085"
       JWT_SECRET: ${JWT_SECRET}
-      DATABASE_URL: postgres://olp:${POSTGRES_PASSWORD}@postgres:5432/exchange_db?sslmode=disable
-    networks: [openpay]
-    depends_on:
-      postgres:
-        condition: service_healthy
+    networks: [openpay, platform]
     restart: unless-stopped
 
   subscription:
@@ -259,13 +214,10 @@ services:
       args:
         SERVICE: subscription
     environment:
+      <<: *db-env
       PORT: "8086"
       JWT_SECRET: ${JWT_SECRET}
-      DATABASE_URL: postgres://olp:${POSTGRES_PASSWORD}@postgres:5432/subscription_db?sslmode=disable
-    networks: [openpay]
-    depends_on:
-      postgres:
-        condition: service_healthy
+    networks: [openpay, platform]
     restart: unless-stopped
 
   notification:
@@ -275,19 +227,17 @@ services:
       args:
         SERVICE: notification
     environment:
+      <<: *db-env
       PORT: "8087"
       JWT_SECRET: ${JWT_SECRET}
-      DATABASE_URL: postgres://olp:${POSTGRES_PASSWORD}@postgres:5432/notification_db?sslmode=disable
       NATS_URL: nats://nats:4222
       SMTP_HOST: ${SMTP_HOST}
       SMTP_PORT: ${SMTP_PORT}
       SMTP_USERNAME: ${SMTP_USERNAME}
       SMTP_PASSWORD: ${SMTP_PASSWORD}
       SMTP_FROM: ${SMTP_FROM}
-    networks: [openpay]
+    networks: [openpay, platform]
     depends_on:
-      postgres:
-        condition: service_healthy
       nats:
         condition: service_healthy
     restart: unless-stopped
@@ -299,20 +249,10 @@ services:
       args:
         SERVICE: admin
     environment:
+      <<: [*db-env, *s3-env]
       PORT: "8088"
       JWT_SECRET: ${JWT_SECRET}
-      DATABASE_URL: postgres://olp:${POSTGRES_PASSWORD}@postgres:5432/admin_db?sslmode=disable
-      MINIO_ENDPOINT: minio:9000
-      MINIO_ACCESS_KEY: ${S3_ACCESS_KEY}
-      MINIO_SECRET_KEY: ${S3_SECRET_KEY}
-      MINIO_BUCKET: kyc-documents
-      MINIO_USE_SSL: "false"
-    networks: [openpay]
-    depends_on:
-      postgres:
-        condition: service_healthy
-      minio:
-        condition: service_healthy
+    networks: [openpay, platform]
     restart: unless-stopped
 
   directdebit:
@@ -322,11 +262,8 @@ services:
       args:
         SERVICE: directdebit
     environment:
+      <<: *db-env
       PORT: "8089"
       JWT_SECRET: ${JWT_SECRET}
-      DATABASE_URL: postgres://olp:${POSTGRES_PASSWORD}@postgres:5432/directdebit_db?sslmode=disable
-    networks: [openpay]
-    depends_on:
-      postgres:
-        condition: service_healthy
+    networks: [openpay, platform]
     restart: unless-stopped
