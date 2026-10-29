@@ -10,51 +10,30 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/minio/minio-go/v7"
-	"github.com/minio/minio-go/v7/pkg/credentials"
 	"github.com/openlankapay/openlankapay/pkg/auth"
+	"github.com/openlankapay/openlankapay/pkg/storage"
 )
 
 // AdminUploadHandler handles file uploads for admin assets (logos, etc).
 type AdminUploadHandler struct {
 	minioClient *minio.Client
 	bucketName  string
-	endpoint    string
 }
 
-// AdminUploadConfig holds MinIO configuration for admin uploads.
-type AdminUploadConfig struct {
-	Endpoint  string
-	AccessKey string
-	SecretKey string
-	Bucket    string
-	UseSSL    bool
-}
-
-// NewAdminUploadHandler creates a new upload handler.
-func NewAdminUploadHandler(cfg AdminUploadConfig) (*AdminUploadHandler, error) {
-	client, err := minio.New(cfg.Endpoint, &minio.Options{
-		Creds:  credentials.NewStaticV4(cfg.AccessKey, cfg.SecretKey, ""),
-		Secure: cfg.UseSSL,
-	})
+// NewAdminUploadHandler creates an upload handler backed by the S3-compatible
+// store in cfg, creating the bucket (private) when it is missing.
+func NewAdminUploadHandler(cfg storage.Config) (*AdminUploadHandler, error) {
+	client, err := storage.NewClient(cfg)
 	if err != nil {
-		return nil, fmt.Errorf("creating minio client: %w", err)
+		return nil, err
 	}
-
-	ctx := context.Background()
-	exists, err := client.BucketExists(ctx, cfg.Bucket)
-	if err != nil {
-		return nil, fmt.Errorf("checking bucket: %w", err)
-	}
-	if !exists {
-		if err := client.MakeBucket(ctx, cfg.Bucket, minio.MakeBucketOptions{}); err != nil {
-			return nil, fmt.Errorf("creating bucket: %w", err)
-		}
+	if err := storage.EnsureBucket(context.Background(), client, cfg); err != nil {
+		return nil, err
 	}
 
 	return &AdminUploadHandler{
 		minioClient: client,
 		bucketName:  cfg.Bucket,
-		endpoint:    cfg.Endpoint,
 	}, nil
 }
 
@@ -121,7 +100,7 @@ func (h *AdminUploadHandler) Upload(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// ServeAsset handles GET /v1/assets/* — serves uploaded files from MinIO.
+// ServeAsset handles GET /v1/assets/* — serves uploaded files from the object store.
 func (h *AdminUploadHandler) ServeAsset(w http.ResponseWriter, r *http.Request) {
 	objectKey := chi.URLParam(r, "*")
 	if objectKey == "" {

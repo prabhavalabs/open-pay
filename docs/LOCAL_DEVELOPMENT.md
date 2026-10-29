@@ -373,6 +373,13 @@ All services use sensible defaults for local development. Override via environme
 | `DB_NAME_SUFFIX` | `_db` | Set it to an empty value to drop the suffix (`DB_NAME_SUFFIX=`) |
 | `DB_SSLMODE` | `disable` | libpq `sslmode` |
 | `DB_POOL_MAX_CONNS` | `10` | Connection pool size per service |
+| `S3_ENDPOINT` | `localhost:9000` | Object store, `host:port` or `http(s)://host:port` (merchant, admin) |
+| `S3_REGION` | empty (discovered) | Store region, e.g. `us-east-1` for MinIO, `garage` for Garage |
+| `S3_FORCE_PATH_STYLE` | `true` | Address buckets as `host/bucket/key` |
+| `S3_USE_SSL` | from the endpoint scheme | Force TLS on or off |
+| `S3_ACCESS_KEY_ID` | `minioadmin` | Access key |
+| `S3_SECRET_ACCESS_KEY` | `minioadmin123` | Secret key |
+| `S3_BUCKET` | `kyc-documents` | Private bucket for uploads; files are served via `/v1/assets/<key>` |
 | `PORT` | Service-specific (8080-8088) | HTTP listen port |
 | `LOG_LEVEL` | `info` | Log level (debug, info, warn, error) |
 | `MERCHANT_SERVICE_URL` | `http://localhost:8082` | Gateway proxy target |

@@ -62,6 +62,8 @@ services:
       timeout: 5s
       retries: 5
 
+  # Creates the bucket. It stays private: files are served through the
+  # gateway (/v1/assets/...), never straight from the store.
   minio-init:
     image: minio/mc:latest
     depends_on:
@@ -71,7 +73,6 @@ services:
       /bin/sh -c "
       mc alias set local http://minio:9000 minioadmin minioadmin123;
       mc mb --ignore-existing local/kyc-documents;
-      mc anonymous set download local/kyc-documents;
       exit 0;
       "
 
