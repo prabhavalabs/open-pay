@@ -22,7 +22,7 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	dbURL := getEnv("DATABASE_URL", "postgres://olp:olp_dev_password@localhost:5433/admin_db?sslmode=disable")
+	dbURL := database.URLFromEnv("admin")
 	pool, err := database.NewPool(ctx, database.DefaultConfig(dbURL), logger)
 	if err != nil {
 		logger.Fatal().Err(err).Msg("failed to connect to database")

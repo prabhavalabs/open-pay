@@ -27,7 +27,7 @@ func main() {
 	defer cancel()
 
 	// Database
-	dbURL := getEnv("DATABASE_URL", "postgres://olp:olp_dev_password@localhost:5433/merchant_db?sslmode=disable")
+	dbURL := database.URLFromEnv("merchant")
 	pool, err := database.NewPool(ctx, database.DefaultConfig(dbURL), logger)
 	if err != nil {
 		logger.Fatal().Err(err).Msg("failed to connect to database")
