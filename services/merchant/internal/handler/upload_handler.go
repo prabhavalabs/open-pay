@@ -11,8 +11,8 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	"github.com/minio/minio-go/v7"
-	"github.com/minio/minio-go/v7/pkg/credentials"
 	"github.com/openlankapay/openlankapay/pkg/auth"
+	"github.com/openlankapay/openlankapay/pkg/storage"
 	"github.com/openlankapay/openlankapay/services/merchant/internal/domain"
 )
 
@@ -27,45 +27,23 @@ type DocumentRepository interface {
 type FileUploadHandler struct {
 	minioClient *minio.Client
 	bucketName  string
-	endpoint    string
 	docs        DocumentRepository
 }
 
-// FileUploadConfig holds MinIO configuration.
-type FileUploadConfig struct {
-	Endpoint  string
-	AccessKey string
-	SecretKey string
-	Bucket    string
-	UseSSL    bool
-}
-
-// NewFileUploadHandler creates a new FileUploadHandler with MinIO client.
-func NewFileUploadHandler(cfg FileUploadConfig, docs DocumentRepository) (*FileUploadHandler, error) {
-	client, err := minio.New(cfg.Endpoint, &minio.Options{
-		Creds:  credentials.NewStaticV4(cfg.AccessKey, cfg.SecretKey, ""),
-		Secure: cfg.UseSSL,
-	})
+// NewFileUploadHandler creates a FileUploadHandler backed by the S3-compatible
+// store in cfg, creating the bucket (private) when it is missing.
+func NewFileUploadHandler(cfg storage.Config, docs DocumentRepository) (*FileUploadHandler, error) {
+	client, err := storage.NewClient(cfg)
 	if err != nil {
-		return nil, fmt.Errorf("creating minio client: %w", err)
+		return nil, err
 	}
-
-	// Ensure bucket exists
-	ctx := context.Background()
-	exists, err := client.BucketExists(ctx, cfg.Bucket)
-	if err != nil {
-		return nil, fmt.Errorf("checking bucket: %w", err)
-	}
-	if !exists {
-		if err := client.MakeBucket(ctx, cfg.Bucket, minio.MakeBucketOptions{}); err != nil {
-			return nil, fmt.Errorf("creating bucket: %w", err)
-		}
+	if err := storage.EnsureBucket(context.Background(), client, cfg); err != nil {
+		return nil, err
 	}
 
 	return &FileUploadHandler{
 		minioClient: client,
 		bucketName:  cfg.Bucket,
-		endpoint:    cfg.Endpoint,
 		docs:        docs,
 	}, nil
 }
@@ -155,8 +133,9 @@ func (h *FileUploadHandler) UploadFile(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Return the file URL
-	fileURL := fmt.Sprintf("http://%s/%s/%s", h.endpoint, h.bucketName, objectKey)
+	// The bucket is private, so return the gateway path that serves the
+	// object rather than a store URL the browser cannot reach.
+	fileURL := "/v1/assets/" + objectKey
 
 	writeJSON(w, http.StatusOK, envelope{
 		"data": map[string]string{

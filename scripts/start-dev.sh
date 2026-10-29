@@ -315,9 +315,10 @@ echo ""
 # ─── Run Migrations ───
 if command -v migrate &> /dev/null; then
     echo -e "${BOLD}Running database migrations...${NC}"
-    DB_URL_BASE="postgres://olp:olp_dev_password@localhost:7020"
+    DB_URL_BASE="postgres://${DB_USER:-olp}:${DB_PASSWORD:-olp_dev_password}@${DB_HOST:-localhost}:${DB_PORT:-7020}"
     for db in merchant payment settlement exchange webhook subscription admin notification directdebit; do
-        migrate -path "migrations/$db" -database "${DB_URL_BASE}/${db}_db?sslmode=disable" up 2>/dev/null || true
+        db_name="${DB_NAME_PREFIX:-}${db}${DB_NAME_SUFFIX-_db}"
+        migrate -path "migrations/$db" -database "${DB_URL_BASE}/${db_name}?sslmode=${DB_SSLMODE:-disable}" up 2>/dev/null || true
     done
     echo -e "  ${GREEN}Migrations complete.${NC}"
     echo ""

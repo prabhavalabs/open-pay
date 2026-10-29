@@ -67,7 +67,7 @@ pnpm --filter admin-dashboard dev --port 3001
 
 ### Step 1: Infrastructure
 
-Start PostgreSQL (port 5433), Redis (port 6379), and NATS (port 4222):
+Start PostgreSQL (port 7020), Redis (port 6379), and NATS (port 4222):
 
 ```bash
 make dev
@@ -237,7 +237,7 @@ make migrate-create svc=payment name=add_refund_table
 ### Run Migration for a Specific Database
 
 ```bash
-migrate -path migrations/merchant -database "postgres://olp:olp_dev_password@localhost:5433/merchant_db?sslmode=disable" up
+migrate -path migrations/merchant -database "postgres://olp:olp_dev_password@localhost:7020/merchant_db?sslmode=disable" up
 ```
 
 ### Connect to Database Directly
@@ -364,7 +364,22 @@ All services use sensible defaults for local development. Override via environme
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `JWT_SECRET` | `dev-jwt-secret-change-in-production-min32chars` | JWT signing secret |
-| `DATABASE_URL` | `postgres://olp:olp_dev_password@localhost:5433/{service}_db?sslmode=disable` | Per-service DB URL |
+| `DATABASE_URL` | unset | Full DB URL for one service; overrides every `DB_*` variable below |
+| `DB_HOST` | `localhost` | Postgres host |
+| `DB_PORT` | `7020` | Postgres port |
+| `DB_USER` | `olp` | Postgres role |
+| `DB_PASSWORD` | `olp_dev_password` | Postgres password |
+| `DB_NAME_PREFIX` | empty | Database name = prefix + service + suffix |
+| `DB_NAME_SUFFIX` | `_db` | Set it to an empty value to drop the suffix (`DB_NAME_SUFFIX=`) |
+| `DB_SSLMODE` | `disable` | libpq `sslmode` |
+| `DB_POOL_MAX_CONNS` | `10` | Connection pool size per service |
+| `S3_ENDPOINT` | `localhost:9000` | Object store, `host:port` or `http(s)://host:port` (merchant, admin) |
+| `S3_REGION` | empty (discovered) | Store region, e.g. `us-east-1` for MinIO, `garage` for Garage |
+| `S3_FORCE_PATH_STYLE` | `true` | Address buckets as `host/bucket/key` |
+| `S3_USE_SSL` | from the endpoint scheme | Force TLS on or off |
+| `S3_ACCESS_KEY_ID` | `minioadmin` | Access key |
+| `S3_SECRET_ACCESS_KEY` | `minioadmin123` | Secret key |
+| `S3_BUCKET` | `kyc-documents` | Private bucket for uploads; files are served via `/v1/assets/<key>` |
 | `PORT` | Service-specific (8080-8088) | HTTP listen port |
 | `LOG_LEVEL` | `info` | Log level (debug, info, warn, error) |
 | `MERCHANT_SERVICE_URL` | `http://localhost:8082` | Gateway proxy target |
@@ -440,7 +455,7 @@ If a migration fails halfway:
 
 ```bash
 # Force set version (replace N with the version number)
-migrate -path migrations/merchant -database "postgres://olp:olp_dev_password@localhost:5433/merchant_db?sslmode=disable" force N
+migrate -path migrations/merchant -database "postgres://olp:olp_dev_password@localhost:7020/merchant_db?sslmode=disable" force N
 ```
 
 ### Frontend "localStorage is not defined"

@@ -3,6 +3,7 @@ package database
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -36,8 +37,18 @@ func NewPool(ctx context.Context, cfg Config, logger zerolog.Logger) (*pgxpool.P
 		return nil, fmt.Errorf("parsing database URL: %w", err)
 	}
 
-	poolConfig.MaxConns = cfg.MaxConns
-	poolConfig.MinConns = cfg.MinConns
+	// pool_max_conns / pool_min_conns in the URL take precedence, so an
+	// operator can size pools per deployment (a shared server caps the
+	// connections each role may open).
+	if !strings.Contains(cfg.URL, "pool_max_conns=") {
+		poolConfig.MaxConns = cfg.MaxConns
+	}
+	if !strings.Contains(cfg.URL, "pool_min_conns=") {
+		poolConfig.MinConns = cfg.MinConns
+	}
+	if poolConfig.MinConns > poolConfig.MaxConns {
+		poolConfig.MinConns = poolConfig.MaxConns
+	}
 	poolConfig.MaxConnLifetime = cfg.MaxConnLifetime
 	poolConfig.MaxConnIdleTime = cfg.MaxConnIdleTime
 

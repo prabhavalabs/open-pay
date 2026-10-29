@@ -15,6 +15,7 @@ import (
 	"github.com/openlankapay/openlankapay/pkg/messaging"
 	"github.com/openlankapay/openlankapay/pkg/notification"
 	"github.com/openlankapay/openlankapay/pkg/observability"
+	"github.com/openlankapay/openlankapay/pkg/storage"
 	pgadapter "github.com/openlankapay/openlankapay/services/merchant/internal/adapter/postgres"
 	"github.com/openlankapay/openlankapay/services/merchant/internal/handler"
 	"github.com/openlankapay/openlankapay/services/merchant/internal/service"
@@ -27,7 +28,7 @@ func main() {
 	defer cancel()
 
 	// Database
-	dbURL := getEnv("DATABASE_URL", "postgres://olp:olp_dev_password@localhost:5433/merchant_db?sslmode=disable")
+	dbURL := database.URLFromEnv("merchant")
 	pool, err := database.NewPool(ctx, database.DefaultConfig(dbURL), logger)
 	if err != nil {
 		logger.Fatal().Err(err).Msg("failed to connect to database")
@@ -70,24 +71,17 @@ func main() {
 	// Document repository
 	docRepo := pgadapter.NewDocumentRepository(pool)
 
-	// File upload handler (MinIO)
-	minioEndpoint := getEnv("MINIO_ENDPOINT", "localhost:9000")
-	minioAccessKey := getEnv("MINIO_ACCESS_KEY", "minioadmin")
-	minioSecretKey := getEnv("MINIO_SECRET_KEY", "minioadmin123")
-	minioBucket := getEnv("MINIO_BUCKET", "kyc-documents")
+	// File upload handler (S3-compatible store: MinIO locally, Garage in production)
 	var uploadHandler *handler.FileUploadHandler
-	uploadHandler, err = handler.NewFileUploadHandler(handler.FileUploadConfig{
-		Endpoint:  minioEndpoint,
-		AccessKey: minioAccessKey,
-		SecretKey: minioSecretKey,
-		Bucket:    minioBucket,
-		UseSSL:    false,
-	}, docRepo)
+	storageCfg, err := storage.ConfigFromEnv()
+	if err == nil {
+		uploadHandler, err = handler.NewFileUploadHandler(storageCfg, docRepo)
+	}
 	if err != nil {
-		logger.Warn().Err(err).Msg("MinIO not available, file uploads disabled")
+		logger.Warn().Err(err).Msg("object storage not available, file uploads disabled")
 		uploadHandler = nil
 	} else {
-		logger.Info().Msg("file upload handler initialized with MinIO")
+		logger.Info().Str("endpoint", storageCfg.Endpoint).Str("bucket", storageCfg.Bucket).Msg("file upload handler initialized")
 	}
 
 	// Audit log client

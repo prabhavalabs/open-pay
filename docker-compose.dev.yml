@@ -19,6 +19,17 @@ x-go-env: &go-env
   JWT_SECRET: ${JWT_SECRET:-dev-jwt-secret-change-in-production-min32chars}
   LOG_LEVEL: ${LOG_LEVEL:-info}
 
+# Database connection for services with a database. Each service connects
+# to DB_NAME_PREFIX + <service> + DB_NAME_SUFFIX, i.e. <service>_db here.
+x-db-env: &db-env
+  DB_HOST: postgres
+  DB_PORT: "5432"
+  DB_USER: olp
+  DB_PASSWORD: ${POSTGRES_PASSWORD:-olp_dev_password}
+  DB_NAME_PREFIX: ""
+  DB_NAME_SUFFIX: _db
+  DB_SSLMODE: disable
+
 services:
   # ─── API Gateway ───
   gateway:
@@ -47,10 +58,9 @@ services:
   payment:
     <<: *go-service
     environment:
-      <<: *go-env
+      <<: [*go-env, *db-env]
       SERVICE: payment
       PORT: "8081"
-      DATABASE_URL: postgres://olp:${POSTGRES_PASSWORD:-olp_dev_password}@postgres:5432/payment_db?sslmode=disable
       EXCHANGE_SERVICE_URL: http://exchange:8085
       MERCHANT_SERVICE_URL: http://merchant:8082
       ADMIN_SERVICE_URL: http://admin:8088
@@ -74,17 +84,17 @@ services:
   merchant:
     <<: *go-service
     environment:
-      <<: *go-env
+      <<: [*go-env, *db-env]
       SERVICE: merchant
       PORT: "8082"
-      DATABASE_URL: postgres://olp:${POSTGRES_PASSWORD:-olp_dev_password}@postgres:5432/merchant_db?sslmode=disable
       NOTIFICATION_SERVICE_URL: http://notification:8087
       ADMIN_SERVICE_URL: http://admin:8088
-      MINIO_ENDPOINT: minio:9000
-      MINIO_ACCESS_KEY: ${S3_ACCESS_KEY:-minioadmin}
-      MINIO_SECRET_KEY: ${S3_SECRET_KEY:-minioadmin123}
-      MINIO_BUCKET: kyc-documents
-      MINIO_USE_SSL: "false"
+      S3_ENDPOINT: http://minio:9000
+      S3_REGION: us-east-1
+      S3_FORCE_PATH_STYLE: "true"
+      S3_ACCESS_KEY_ID: minioadmin
+      S3_SECRET_ACCESS_KEY: minioadmin123
+      S3_BUCKET: kyc-documents
       SMTP_HOST: mailpit
       SMTP_PORT: "1025"
       SMTP_USERNAME: ""
@@ -102,10 +112,9 @@ services:
   settlement:
     <<: *go-service
     environment:
-      <<: *go-env
+      <<: [*go-env, *db-env]
       SERVICE: settlement
       PORT: "8083"
-      DATABASE_URL: postgres://olp:${POSTGRES_PASSWORD:-olp_dev_password}@postgres:5432/settlement_db?sslmode=disable
     ports:
       - "7003:8083"
     depends_on:
@@ -116,10 +125,9 @@ services:
   webhook:
     <<: *go-service
     environment:
-      <<: *go-env
+      <<: [*go-env, *db-env]
       SERVICE: webhook
       PORT: "8084"
-      DATABASE_URL: postgres://olp:${POSTGRES_PASSWORD:-olp_dev_password}@postgres:5432/webhook_db?sslmode=disable
       NATS_URL: nats://nats:4222
     ports:
       - "7004:8084"
@@ -133,10 +141,9 @@ services:
   exchange:
     <<: *go-service
     environment:
-      <<: *go-env
+      <<: [*go-env, *db-env]
       SERVICE: exchange
       PORT: "8085"
-      DATABASE_URL: postgres://olp:${POSTGRES_PASSWORD:-olp_dev_password}@postgres:5432/exchange_db?sslmode=disable
     ports:
       - "7005:8085"
     depends_on:
@@ -147,10 +154,9 @@ services:
   subscription:
     <<: *go-service
     environment:
-      <<: *go-env
+      <<: [*go-env, *db-env]
       SERVICE: subscription
       PORT: "8086"
-      DATABASE_URL: postgres://olp:${POSTGRES_PASSWORD:-olp_dev_password}@postgres:5432/subscription_db?sslmode=disable
     ports:
       - "7006:8086"
     depends_on:
@@ -161,10 +167,9 @@ services:
   notification:
     <<: *go-service
     environment:
-      <<: *go-env
+      <<: [*go-env, *db-env]
       SERVICE: notification
       PORT: "8087"
-      DATABASE_URL: postgres://olp:${POSTGRES_PASSWORD:-olp_dev_password}@postgres:5432/notification_db?sslmode=disable
       NATS_URL: nats://nats:4222
       SMTP_HOST: mailpit
       SMTP_PORT: "1025"
@@ -183,15 +188,15 @@ services:
   admin:
     <<: *go-service
     environment:
-      <<: *go-env
+      <<: [*go-env, *db-env]
       SERVICE: admin
       PORT: "8088"
-      DATABASE_URL: postgres://olp:${POSTGRES_PASSWORD:-olp_dev_password}@postgres:5432/admin_db?sslmode=disable
-      MINIO_ENDPOINT: minio:9000
-      MINIO_ACCESS_KEY: ${S3_ACCESS_KEY:-minioadmin}
-      MINIO_SECRET_KEY: ${S3_SECRET_KEY:-minioadmin123}
-      MINIO_BUCKET: kyc-documents
-      MINIO_USE_SSL: "false"
+      S3_ENDPOINT: http://minio:9000
+      S3_REGION: us-east-1
+      S3_FORCE_PATH_STYLE: "true"
+      S3_ACCESS_KEY_ID: minioadmin
+      S3_SECRET_ACCESS_KEY: minioadmin123
+      S3_BUCKET: kyc-documents
     ports:
       - "7008:8088"
     depends_on:
@@ -204,10 +209,9 @@ services:
   directdebit:
     <<: *go-service
     environment:
-      <<: *go-env
+      <<: [*go-env, *db-env]
       SERVICE: directdebit
       PORT: "8089"
-      DATABASE_URL: postgres://olp:${POSTGRES_PASSWORD:-olp_dev_password}@postgres:5432/directdebit_db?sslmode=disable
     ports:
       - "7009:8089"
     depends_on:
@@ -262,7 +266,7 @@ services:
     profiles: ["tools"]
     entrypoint: ["/bin/sh", "/docker-migrate.sh"]
     environment:
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-olp_dev_password}
+      <<: *db-env
     volumes:
       - ./migrations:/migrations
       - ./scripts/docker-migrate.sh:/docker-migrate.sh:ro

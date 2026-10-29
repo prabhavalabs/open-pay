@@ -11,6 +11,7 @@ import (
 	"github.com/openlankapay/openlankapay/pkg/database"
 	"github.com/openlankapay/openlankapay/pkg/notification"
 	"github.com/openlankapay/openlankapay/pkg/observability"
+	"github.com/openlankapay/openlankapay/pkg/storage"
 	pgadapter "github.com/openlankapay/openlankapay/services/admin/internal/adapter/postgres"
 	"github.com/openlankapay/openlankapay/services/admin/internal/handler"
 	"github.com/openlankapay/openlankapay/services/admin/internal/service"
@@ -22,7 +23,7 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	dbURL := getEnv("DATABASE_URL", "postgres://olp:olp_dev_password@localhost:5433/admin_db?sslmode=disable")
+	dbURL := database.URLFromEnv("admin")
 	pool, err := database.NewPool(ctx, database.DefaultConfig(dbURL), logger)
 	if err != nil {
 		logger.Fatal().Err(err).Msg("failed to connect to database")
@@ -45,18 +46,14 @@ func main() {
 
 	h := handler.NewAdminHandler(auditSvc, authSvc, legalDocRepo, settingsRepo, adminUserRepo, notifClient)
 
-	// Admin file upload handler (MinIO)
+	// Admin file upload handler (S3-compatible store: MinIO locally, Garage in production)
 	var uploadHandler *handler.AdminUploadHandler
-	minioEndpoint := getEnv("MINIO_ENDPOINT", "localhost:9000")
-	uploadHandler, err = handler.NewAdminUploadHandler(handler.AdminUploadConfig{
-		Endpoint:  minioEndpoint,
-		AccessKey: getEnv("MINIO_ACCESS_KEY", "minioadmin"),
-		SecretKey: getEnv("MINIO_SECRET_KEY", "minioadmin123"),
-		Bucket:    getEnv("MINIO_BUCKET", "kyc-documents"),
-		UseSSL:    false,
-	})
+	storageCfg, err := storage.ConfigFromEnv()
+	if err == nil {
+		uploadHandler, err = handler.NewAdminUploadHandler(storageCfg)
+	}
 	if err != nil {
-		logger.Warn().Err(err).Msg("MinIO not available, admin uploads disabled")
+		logger.Warn().Err(err).Msg("object storage not available, admin uploads disabled")
 		uploadHandler = nil
 	}
 
